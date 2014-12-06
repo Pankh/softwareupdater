@@ -1,20 +1,22 @@
-""" 
-Author: Justin Cappos
-
-Start Date: August 4, 2008
-
-Description:
-A software updater for the node manager.   The focus is to make it secure, 
-robust, and simple (in that order).
-
-Usage:  ./softwareupdater.py
-
-
-Updated 1/23/2009 use servicelogger to log errors - Xuanhua (Sean)s Ren
-
-
 """
+<Program Name>
+  softwareupdater.py
 
+<Started>
+  August 4, 2008.
+  
+  Updated January 23, 2009.
+    Use servicelogger to log errors - Xuanhua (Sean)s Ren
+
+<Authors>
+  Justin Cappos.
+
+<Purpose>
+  A software updater for the node manager.   The focus is to make it secure,
+  robust, and simple (in that order).
+  
+  Usage:  ./softwareupdater.py
+"""
 
 
 import sys
@@ -30,9 +32,10 @@ except ImportError:
 
 import daemon
 
-
-# this is being done so that the resources accounting doesn't interfere with logging
+# This is being done so that the resources accounting doesn't interfere with
+# logging.
 from repyportability import *
+
 _context = locals()
 add_dy_support(_context)
 
@@ -51,20 +54,31 @@ import portable_popen
 # Import servicelogger to do logging
 import servicelogger
 
+import tuf.interposition
+from tuf.interposition import urllib_tuf as urllib
 
-dy_import_module_symbols("signeddata.r2py")
-dy_import_module_symbols("sha.r2py")
+# VLAD: Use dy_import_module().  Previous import statements used
+# dy_import_module_symbols() and imported all of the module's names into
+# the local namespace, which can potentially lead to name clashes.  It also
+# decreased readability because a function's origin was not apparent.
+signeddata = dy_import_module('signeddata.r2py')
+sha = dy_import_module('sha.r2py')
+time = dy_import_module('time.r2py')
 
 # Armon: The port that should be used to update our time using NTP
 TIME_PORT = 51234
 TIME_PORT_2 = 42345
 
-softwareurl = "http://seattle.cs.washington.edu/couvb/updatesite/0.1/"
+#softwareurl = "http://seattle.cs.washington.edu/couvb/updatesite/0.1/"
+
+softwareurl = "http://localhost/"
+
+configuration = tuf.interposition.configure()
 
 # embedded this because it seems easier to update it along with this file
 # Every computer running Seattle will have this same public key, and will trust
 # files signed by this key.
-softwareupdatepublickey = {'e':82832270266597330072676409661763231354244983360850404742185516224735762244569727906889368190381098316859532462559839005559035695542121011189767114678746829532642015227757061325811995458461556243183965254348908097559976740460038862499279411461302045605434778587281242796895759723616079286531587479712074947611, 'n':319621204384190529645831372818389656614287850643207619926347176392517761801427609535545760457027184668587674034177692977122041230031985031724339016854308623931563908276376263003735701277100364224187045110833742749159504168429702766032353498688487937836208653017735915837622736764430341063733201947629404712911592942893299407289815035924224344585640141382996031910529762480483482480840200108190644743566141062967857181966489101744929170144756204101501136046697030104623523067263295405505628760205318871212056879946829241448986763757070565574197490565540710448548232847380638562809965308287901471553677400477022039092783245720343246522144179191881098268618863594564939975401607436281396130900640289859459360314214324155479461961863933551434423773320970748327521097336640702078449006530782991443968680573263568609595969967079764427272827202433035192418494908184888678872217792993640959292902948045622147093326912328933981365394795535990933982037636876825043938697362285277475661382202880481400699819441979130858152032120174957606455858082332914545153781708896942610940094268714863253465554125515897189179557899347310399568254877069082016414203023408461051519104976942275899720740657969311479534442473551582563833145735116565451064388421}
+softwareupdatepublickey = {'e': 65537, 'n': 637025421205050873596952365261771589773951322631598475106072787020271993053175764188117250704423518194132255633483673262786885335768938773384277083799610885609007389659628664009437678679547920353536220242626289496564286851908334878817556058264391117801101600261049148163810713672381489146862405173179694757012124700418784698863900022574723314468742948087760377648874820849722447060951547948966273618238367948950338286051116019772088223843609162095459426393334680529722250866695065650620212198838326952459691203415045593749611334748080296287149032472439198726118625478070245277378757441525359087444638854258738354342671602496922366016004736236214347025516130747701580901920727684108661222403912764291731327147737837683772263557563688440473804536076248109992516391217595312055691798922657899501386669019455042617664245392970449575870338454728331871102094285124319960621330393021572186170740044818946739408359631036940686520915351289107751181604209476464627301953229727051590037149102889990938284590213971613156943445571639683977746161053986604365951650449726948385512772016178523653987213735745284871644785947680521097303992011381545470392037724783259014902814829265564292625674624573189198192669832632146320948698286979867829240183059}
 
 # Whether the nodemanager should be told not to daemonize when it is restarted.
 # This is only to assist our automated tests.
@@ -151,7 +165,7 @@ def get_file_hash(filename):
   filedata = fileobj.read()
   fileobj.close()
 
-  return sha_hexhash(filedata)
+  return sha.sha_hexhash(filedata)
 
 
 
@@ -172,7 +186,7 @@ def safe_download(serverpath, filename, destdir, filesize):
 
   try:
     # Fix for #1361.   serverpath may not end in '/'
-    urllib.urlretrieve(serverpath+'/'+filename,destdir+filename)
+    urllib.urlretrieve(serverpath+filename, destdir+filename)
     return True
 
   except Exception,e:
@@ -295,7 +309,8 @@ def do_rsync(serverpath, destdir, tempdir):
   newmetafileobject.close()
 
   # Incorrectly signed, we don't update...
-  if not signeddata_issignedcorrectly(newmetafiledata, softwareupdatepublickey):
+  if not signeddata.signeddata_issignedcorrectly(newmetafiledata,
+                                                 softwareupdatepublickey):
     safe_log("[do_rsync] New metainfo not signed correctly. Not updating.")
     return []
 
@@ -311,10 +326,10 @@ def do_rsync(serverpath, destdir, tempdir):
   else:
     try:
       # Armon: Update our time via NTP, before we check the meta info
-      time_updatetime(TIME_PORT)
+      time.time_updatetime(TIME_PORT)
     except Exception:
       try:
-        time_updatetime(TIME_PORT_2)
+        time.time_updatetime(TIME_PORT_2)
       except Exception:
         # Steven: Sometimes we can't successfully update our time, so this is
         # better than generating a traceback.
@@ -322,8 +337,9 @@ def do_rsync(serverpath, destdir, tempdir):
         return []
     
     # they're both good.   Let's compare them...
-    shoulduse, reasons = signeddata_shouldtrust(oldmetafiledata,newmetafiledata,softwareupdatepublickey)
-
+    shoulduse, reasons = \
+      signeddata.signeddata_shouldtrust(oldmetafiledata, newmetafiledata,
+                                        softwareupdatepublickey)
     if shoulduse == True:
       # great!   All is well...
       pass
@@ -350,13 +366,13 @@ def do_rsync(serverpath, destdir, tempdir):
         # we should distrust. - Brent
         reasons.remove('Public keys do not match')
         for comment in reasons:
-          if comment in signeddata_fatal_comments:
+          if comment in signeddata.signeddata_fatal_comments:
             # If there is a different fatal comment still there, still log it
             # and don't perform the update.
             safe_log("[do_rsync] Serious problem with signed metainfo: " + str(reasons))
             return []
             
-          if comment in signeddata_warning_comments:
+          if comment in signeddata.signeddata_warning_comments:
             # If there is a different warning comment still there, log the
             # warning.  We will take care of specific behavior shortly.
             safe_log("[do_rsync] " + str(comment))
@@ -779,7 +795,7 @@ def main():
       # We need to wake up every 30 seconds otherwise we will take
       # the full 5-55 minutes before we die when someone tries to
       # kill us nicely.
-      sleep(30)
+      sleep(0.05)
       # Make sure we still have the process lock.
       # If not, we should exit
       if not runonce.stillhaveprocesslock('softwareupdater.old'):
@@ -795,6 +811,7 @@ def main():
     # where I'll put files...
     tempdir = tempfile.mkdtemp()+"/"
 
+    tuf.interposition.refresh(configuration)
 
     # I'll clean this up in a minute
     try:
